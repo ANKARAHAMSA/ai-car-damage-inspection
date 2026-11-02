@@ -1,0 +1,19 @@
+{
+  "best_experiment": "ConvNeXt-Tiny (224px, With Aug)",
+  "model_name": "convnext_tiny",
+  "img_size": 224,
+  "best_val_auroc": 0.8843,
+  "calib_scale": 0.75,
+  "calib_bias": -1.0406,
+  "ece_before": 0.1311,
+  "ece_after": 0.0651,
+  "operating_threshold": 0.09,
+  "uncertain_band": [
+    0.05,
+    0.29
+  ],
+  "val_recall_at_threshold": 0.9556,
+  "val_precision_at_threshold": 0.4674,
+  "val_f1_at_threshold": 0.6277,
+  "val_accuracy_at_threshold": 0.6531
+}
