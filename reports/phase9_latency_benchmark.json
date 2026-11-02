@@ -1,0 +1,16 @@
+{
+  "cpu": {
+    "quality_gate": 3.76,
+    "stage1_classifier": 292.08,
+    "stage2_detector": 21.18,
+    "stage3_severity": 0.04,
+    "total": 323.68
+  },
+  "mps": {
+    "quality_gate": 3.73,
+    "stage1_classifier": 19.39,
+    "stage2_detector": 29.91,
+    "stage3_severity": 0.03,
+    "total": 59.37
+  }
+}
