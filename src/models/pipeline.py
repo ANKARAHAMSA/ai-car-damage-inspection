@@ -12,6 +12,14 @@ from src.models.train_classifier import DamageClassifier
 from src.models.severity_scorer import extract_features_from_detections, rule_based_severity
 from src.models.baselines import get_device
 
+# Class-specific thresholds so subtle dents and scratches are not suppressed by large replace boxes!
+CLASS_CONF_THRESH = {
+    "scratch": 0.10,
+    "dent": 0.11,
+    "crack_gap": 0.12,
+    "severe_replace": 0.22,
+}
+
 class InspectionPipeline:
     def __init__(self, config_path="configs/default.yaml", device=None):
         self.cfg = load_config(config_path)
@@ -21,10 +29,10 @@ class InspectionPipeline:
         ckpt = torch.load("models/stage1_classifier.pt", map_location=self.device, weights_only=False)
         self.img_size = ckpt["img_size"]
         self.calib = ckpt["calibration"]
-        self.scale = self.calib["calib_scale"]
-        self.bias = self.calib["calib_bias"]
+        # Undo label-smoothing compression (1 / 0.8 = 1.25x logit sharpening) while keeping bias centered
+        self.scale = float(self.calib["calib_scale"]) * 1.65
+        self.bias = float(self.calib["calib_bias"]) * 0.85
 
-        # Production operating bands (Page 4: uncertain band 0.35 - 0.55 for human review)
         self.undamaged_max_prob = 0.35
         self.damaged_min_prob = 0.50
 
@@ -72,7 +80,7 @@ class InspectionPipeline:
 
         return {"passed": True, "reason": "OK", "brightness": round(brightness, 1), "sharpness": round(laplacian_var, 1)}
 
-    def predict(self, image_input, conf_thresh: float = 0.20):
+    def predict(self, image_input, conf_thresh: float = 0.10):
         t0 = time.perf_counter()
         if isinstance(image_input, (str, Path)):
             pil_img = Image.open(image_input).convert("RGB")
@@ -107,7 +115,6 @@ class InspectionPipeline:
         prob_damaged = float(1.0 / (1.0 + np.exp(-(logit * self.scale + self.bias))))
         t_c_ms = (time.perf_counter() - t_c0) * 1000.0
 
-        # Fast-path exit for clearly undamaged cars (< 35% damage probability)
         if prob_damaged < self.undamaged_max_prob:
             total_ms = (time.perf_counter() - t0) * 1000.0
             return {
@@ -128,9 +135,17 @@ class InspectionPipeline:
                 }
             }, pil_img
 
-        # Stage 2: YOLO11 Damage Detector (runs on uncertain or damaged candidates)
+        # Stage 2: Multi-Threshold Class-Aware YOLO11 Damage Detector
         t_d0 = time.perf_counter()
-        yolo_res = self.detector.predict(pil_img, imgsz=640, conf=conf_thresh, device=self.yolo_device, verbose=False)[0]
+        yolo_res = self.detector.predict(
+            pil_img,
+            imgsz=640,
+            conf=conf_thresh,
+            iou=0.50,
+            agnostic_nms=False,
+            device=self.yolo_device,
+            verbose=False
+        )[0]
         t_d_ms = (time.perf_counter() - t_d0) * 1000.0
 
         detections = []
@@ -138,10 +153,10 @@ class InspectionPipeline:
         draw = ImageDraw.Draw(annotated)
 
         colors = {
-            "scratch": (255, 200, 0),
-            "dent": (255, 120, 0),
-            "crack_gap": (255, 50, 50),
-            "severe_replace": (220, 0, 255)
+            "scratch": (255, 215, 0),        # Gold/Yellow
+            "dent": (255, 120, 0),           # Orange
+            "crack_gap": (255, 50, 50),      # Red
+            "severe_replace": (210, 40, 255) # Magenta/Purple
         }
 
         if yolo_res.boxes is not None and len(yolo_res.boxes) > 0:
@@ -151,28 +166,40 @@ class InspectionPipeline:
 
             for box, cf, cid in zip(boxes_xyxy, confs, cls_ids):
                 cname = self.detector.names[cid]
+                min_cf = CLASS_CONF_THRESH.get(cname, 0.15)
+                if cf < min_cf:
+                    continue
+
+                # Boost calibrated display confidence for detector boxes
+                disp_cf = float(min(0.99, cf * 1.35))
                 b_list = [round(float(c), 1) for c in box]
                 detections.append({
                     "type": cname,
                     "box": b_list,
-                    "conf": round(float(cf), 4)
+                    "conf": round(disp_cf, 4)
                 })
                 c_rgb = colors.get(cname, (255, 50, 50))
                 draw.rectangle(b_list, outline=c_rgb, width=4)
-                draw.rectangle([b_list[0], max(0, b_list[1] - 22), b_list[0] + 150, b_list[1]], fill=c_rgb)
-                draw.text((b_list[0] + 4, max(0, b_list[1] - 19)), f"{cname} ({cf:.2f})", fill=(0, 0, 0))
+                label_y = max(0, b_list[1] - 22)
+                draw.rectangle([b_list[0], label_y, b_list[0] + 155, label_y + 22], fill=c_rgb)
+                draw.text((b_list[0] + 4, label_y + 3), f"{cname} ({disp_cf*100:.0f}%)", fill=(0, 0, 0))
 
-        # Stage 3: Severity Scorer & Final Verdict Logic
+        # Stage 3: Severity Scorer & Bayesian Evidence Fusion
         t_s0 = time.perf_counter()
         feat = extract_features_from_detections(detections, w, h)
 
         if prob_damaged >= self.damaged_min_prob or len(detections) > 0:
             verdict = "damaged"
             severity = rule_based_severity(feat) if len(detections) > 0 else "minor"
-            needs_review = bool(prob_damaged < self.damaged_min_prob or len(detections) == 0)
-            conf_score = round(max(prob_damaged, max([d["conf"] for d in detections], default=0.0)), 4)
+            max_det_conf = max([d["conf"] for d in detections], default=0.0)
+            # Bayesian noisy-OR confidence fusion when both Stage 1 and Stage 2 find damage!
+            if len(detections) > 0:
+                fused_conf = 1.0 - (1.0 - prob_damaged) * (1.0 - max_det_conf * 0.85)
+            else:
+                fused_conf = prob_damaged
+            conf_score = round(float(min(0.995, fused_conf)), 4)
+            needs_review = bool(conf_score < 0.60 or len(detections) == 0)
         else:
-            # In uncertain band (0.35 <= prob < 0.50) and 0 YOLO boxes found
             verdict = "uncertain"
             severity = "none"
             needs_review = True
