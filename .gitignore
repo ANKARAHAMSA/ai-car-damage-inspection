@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+data/raw/
+data/yolo/
+*.pt
+*.pth
+*.onnx
+wandb/
+runs/
+reports/*.pdf
+.DS_Store
