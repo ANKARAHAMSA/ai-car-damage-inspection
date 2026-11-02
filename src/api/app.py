@@ -146,7 +146,7 @@ def web_ui():
     </div>
 
     <div class="card">
-      <input type="file" id="fileInput" accept="image/jpeg,image/png,image/webp" />
+      <input type="file" id="fileInput" accept="image/jpeg,image/png,image/webp" onchange="runInspection()" />
       <button class="btn" onclick="runInspection()">Run AI Inspection & Auto-Label</button>
       <span id="status" style="margin-left:12px; color:#94a3b8;"></span>
     </div>
