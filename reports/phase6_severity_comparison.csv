@@ -1,0 +1,4 @@
+Method,Accuracy,Macro_F1,Cohens_Kappa
+Rule-Based Heuristic (Area + Critical Type Bump),0.9333,0.9333,0.9508
+ML Scorer (Area + Region Geometry Only),0.7778,0.7693,0.7989
+ML Scorer (Full Geometry + Damage Types),0.9778,0.9778,0.9836
