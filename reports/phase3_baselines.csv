@@ -1,0 +1,4 @@
+Baseline,Accuracy,Precision,Recall,F1,AUROC
+Majority Class (Always Undamaged),0.6939,0.0,0.0,0.0,0.5
+Small CNN from Scratch,0.7347,0.6071,0.3778,0.4658,0.7651
+EfficientNet-B0 (Frozen Backbone),0.5986,0.36,0.4,0.3789,0.6305
