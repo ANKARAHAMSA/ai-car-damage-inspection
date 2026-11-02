@@ -1,0 +1,81 @@
+project_name: "car-damage-inspection"
+seed: 42
+
+data:
+  raw_dir: "/Users/shahinhamza/Desktop/Annotations"
+  splits_dir: "data/splits"
+  yolo_dir: "data/yolo"
+  train_ratio: 0.70
+  val_ratio: 0.15
+  test_ratio: 0.15
+  phash_threshold: 8
+
+quality_gate:
+  min_width: 224
+  min_height: 224
+  min_blur_laplacian: 80.0
+  min_brightness: 30.0
+  max_brightness: 235.0
+
+classifier:
+  model_name: "efficientnet_b0"
+  img_size: 224
+  batch_size: 32
+  epochs_frozen: 5
+  epochs_unfrozen: 15
+  lr_head: 0.001
+  lr_unfrozen: 0.0001
+  label_smoothing: 0.1
+  uncertain_band: [0.35, 0.65]
+
+detector:
+  model_name: "yolo11s.pt"
+  img_size: 640
+  epochs: 100
+  patience: 20
+
+labels:
+  damage_minor:
+    - "scratch"
+    - "dent minor"
+  damage_moderate:
+    - "bumper dent"
+    - "dent medium"
+    - "panel gap"
+    - "crack"
+    - "bumper crack"
+    - "bent"
+    - "flat"
+  damage_severe:
+    - "dent major"
+    - "replace"
+    - "bumper replace"
+  car_parts:
+    - "tyre"
+    - "rim"
+    - "right orvm"
+    - "right fender"
+    - "right front door"
+    - "bonnet"
+    - "rear bumper"
+    - "left tail lamp"
+    - "right headlamp"
+    - "front windshield"
+    - "front bumper"
+    - "left front door"
+    - "left orvm"
+    - "left headlamp"
+    - "front grill"
+    - "left fender"
+    - "left quarter panel"
+    - "boot"
+    - "right tail lamp"
+    - "rear windshield"
+    - "number plate"
+    - "right rear door"
+    - "right quarter panel"
+    - "left rear door"
+    - "right running board"
+    - "left running board"
+    - "right indicator"
+    - "left indicator"
