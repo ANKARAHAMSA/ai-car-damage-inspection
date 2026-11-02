@@ -27,12 +27,11 @@ def generate_pdf_report(report_id: str, orig_img: Image.Image, ann_img: Image.Im
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     story.append(Paragraph(f"<b>Report ID:</b> {report_id} &nbsp;|&nbsp; <b>Timestamp:</b> {ts}", sub_style))
 
-    # Summary Table
     verdict = result.get("verdict", "unknown").upper()
     sev = result.get("severity", "none").upper()
     conf = f"{result.get('confidence', 0.0) * 100:.1f}%"
     area_pct = f"{result.get('damage_ratio', 0.0) * 100:.2f}%"
-    review_str = "YES (Human Triage Recommended)" if result.get("needs_review") else "NO (Automated Pass)"
+    review_str = "YES (Human Review)" if result.get("needs_review") else "NO (Auto Pass)"
 
     summary_data = [
         ["Inspection Verdict", verdict, "Confidence Score", conf],
@@ -52,7 +51,6 @@ def generate_pdf_report(report_id: str, orig_img: Image.Image, ann_img: Image.Im
     story.append(t_sum)
     story.append(Spacer(1, 16))
 
-    # Side-by-side Original & Annotated Images
     story.append(Paragraph("<b>Visual Inspection (Original vs. AI Annotated Detections)</b>", styles["Heading3"]))
     story.append(Spacer(1, 6))
     img_table = Table([
@@ -68,7 +66,6 @@ def generate_pdf_report(report_id: str, orig_img: Image.Image, ann_img: Image.Im
     story.append(img_table)
     story.append(Spacer(1, 16))
 
-    # Detections Table
     story.append(Paragraph("<b>Localized Damage Regions</b>", styles["Heading3"]))
     dets = result.get("detections", [])
     if dets:

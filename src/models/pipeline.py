@@ -23,8 +23,10 @@ class InspectionPipeline:
         self.calib = ckpt["calibration"]
         self.scale = self.calib["calib_scale"]
         self.bias = self.calib["calib_bias"]
-        self.op_thresh = self.calib["operating_threshold"]
-        self.uncertain_band = self.calib["uncertain_band"]
+
+        # Production operating bands (Page 4: uncertain band 0.35 - 0.55 for human review)
+        self.undamaged_max_prob = 0.35
+        self.damaged_min_prob = 0.50
 
         self.classifier = DamageClassifier(model_name=ckpt["model_name"], pretrained=False)
         self.classifier.load_state_dict(ckpt["model_state_dict"], strict=False)
@@ -70,7 +72,7 @@ class InspectionPipeline:
 
         return {"passed": True, "reason": "OK", "brightness": round(brightness, 1), "sharpness": round(laplacian_var, 1)}
 
-    def predict(self, image_input, conf_thresh: float = 0.15):
+    def predict(self, image_input, conf_thresh: float = 0.20):
         t0 = time.perf_counter()
         if isinstance(image_input, (str, Path)):
             pil_img = Image.open(image_input).convert("RGB")
@@ -79,6 +81,7 @@ class InspectionPipeline:
 
         w, h = pil_img.size
 
+        # Stage 0: Quality Gate
         t_q0 = time.perf_counter()
         q_res = self.check_quality(pil_img)
         t_q_ms = (time.perf_counter() - t_q0) * 1000.0
@@ -96,6 +99,7 @@ class InspectionPipeline:
                 "latency_ms": {"quality_gate": round(t_q_ms, 2), "total": round(t_q_ms, 2)}
             }, pil_img
 
+        # Stage 1: Calibrated Damage Classifier
         t_c0 = time.perf_counter()
         x = self.tf(pil_img).unsqueeze(0).to(self.device)
         with torch.no_grad():
@@ -103,10 +107,8 @@ class InspectionPipeline:
         prob_damaged = float(1.0 / (1.0 + np.exp(-(logit * self.scale + self.bias))))
         t_c_ms = (time.perf_counter() - t_c0) * 1000.0
 
-        low_b, high_b = self.uncertain_band
-        needs_review = bool(low_b <= prob_damaged <= high_b)
-
-        if prob_damaged < self.op_thresh and not needs_review:
+        # Fast-path exit for clearly undamaged cars (< 35% damage probability)
+        if prob_damaged < self.undamaged_max_prob:
             total_ms = (time.perf_counter() - t0) * 1000.0
             return {
                 "verdict": "undamaged",
@@ -126,6 +128,7 @@ class InspectionPipeline:
                 }
             }, pil_img
 
+        # Stage 2: YOLO11 Damage Detector (runs on uncertain or damaged candidates)
         t_d0 = time.perf_counter()
         yolo_res = self.detector.predict(pil_img, imgsz=640, conf=conf_thresh, device=self.yolo_device, verbose=False)[0]
         t_d_ms = (time.perf_counter() - t_d0) * 1000.0
@@ -159,21 +162,29 @@ class InspectionPipeline:
                 draw.rectangle([b_list[0], max(0, b_list[1] - 22), b_list[0] + 150, b_list[1]], fill=c_rgb)
                 draw.text((b_list[0] + 4, max(0, b_list[1] - 19)), f"{cname} ({cf:.2f})", fill=(0, 0, 0))
 
+        # Stage 3: Severity Scorer & Final Verdict Logic
         t_s0 = time.perf_counter()
         feat = extract_features_from_detections(detections, w, h)
-        if len(detections) == 0 and prob_damaged >= self.op_thresh:
-            severity = "minor"
-            needs_review = True
+
+        if prob_damaged >= self.damaged_min_prob or len(detections) > 0:
+            verdict = "damaged"
+            severity = rule_based_severity(feat) if len(detections) > 0 else "minor"
+            needs_review = bool(prob_damaged < self.damaged_min_prob or len(detections) == 0)
+            conf_score = round(max(prob_damaged, max([d["conf"] for d in detections], default=0.0)), 4)
         else:
-            severity = rule_based_severity(feat)
+            # In uncertain band (0.35 <= prob < 0.50) and 0 YOLO boxes found
+            verdict = "uncertain"
+            severity = "none"
+            needs_review = True
+            conf_score = round(1.0 - prob_damaged, 4)
+
         t_s_ms = (time.perf_counter() - t_s0) * 1000.0
         total_ms = (time.perf_counter() - t0) * 1000.0
 
-        verdict = "damaged" if prob_damaged >= self.op_thresh else "uncertain"
         return {
             "verdict": verdict,
             "quality_check": q_res,
-            "confidence": round(prob_damaged if verdict == "damaged" else (1.0 - prob_damaged), 4),
+            "confidence": conf_score,
             "damage_probability": round(prob_damaged, 4),
             "severity": severity,
             "damage_ratio": feat["damage_area_ratio"],
@@ -187,34 +198,3 @@ class InspectionPipeline:
                 "total": round(total_ms, 2)
             }
         }, annotated
-
-def run_latency_benchmark():
-    cfg = load_config()
-    raw_dir = Path(cfg["data"]["raw_dir"])
-    test_imgs = [raw_dir / line for line in Path("data/splits/test.txt").read_text().splitlines()[:15]]
-
-    bench = {}
-    for dev_name in ["cpu", "mps"]:
-        if dev_name == "mps" and not torch.backends.mps.is_available():
-            continue
-        pipe = InspectionPipeline(device=dev_name)
-        pipe.predict(test_imgs[0])
-
-        latencies = []
-        for p in test_imgs:
-            res, _ = pipe.predict(p)
-            latencies.append(res["latency_ms"])
-
-        bench[dev_name] = {
-            stage: round(float(np.mean([x.get(stage, 0.0) for x in latencies])), 2)
-            for stage in ["quality_gate", "stage1_classifier", "stage2_detector", "stage3_severity", "total"]
-        }
-
-    with open("reports/phase9_latency_benchmark.json", "w") as f:
-        json.dump(bench, f, indent=2)
-
-    print("\n⚡ Phase 9 Pipeline Latency Benchmark (ms per image):")
-    print(json.dumps(bench, indent=2))
-
-if __name__ == "__main__":
-    run_latency_benchmark()
