@@ -1,0 +1,8 @@
+{
+  "Test_AUROC": 0.8586,
+  "Test_Recall_Damaged": 0.907,
+  "Test_Precision_Damaged": 0.4239,
+  "Test_F1": 0.5778,
+  "Test_Accuracy": 0.6069,
+  "Test_ECE": 0.0393
+}

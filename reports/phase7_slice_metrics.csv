@@ -1,0 +1,7 @@
+Slice_Category,Slice_Name,Count,Recall_Damaged,AUROC
+Lighting,Dim/Shadow (<95),4,1.0,0.3333
+Lighting,Normal (95-145),134,0.9024,0.8592
+Lighting,Bright/Glare (>145),7,1.0,1.0
+Damage_Severity,Minor,16,0.875,1.0
+Damage_Severity,Moderate,14,0.9286,1.0
+Damage_Severity,Severe,13,0.9231,1.0
